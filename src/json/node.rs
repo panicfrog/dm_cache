@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use bytes::{Bytes, BytesMut};
 
 use super::error::EncodeError;
+use anyhow::Result;
 
 pub struct AutoIncrementId(AtomicU64);
 
@@ -27,37 +28,92 @@ impl AutoIncrementId {
     }
 }
 
+struct VariableSizedId {
+    value: Vec<u8>,
+}
+
+impl VariableSizedId {
+    pub fn bytes_len(&self) -> usize {
+        self.value.len()
+    }
+    pub fn new(value: u64) -> Self {
+        let mut size = 1;
+        let mut v = value;
+        while v >= 0x80 {
+            size += 1;
+            v >>= 7;
+        }
+        let mut bytes = Vec::with_capacity(size);
+        let mut v = value;
+        for _ in 0..size {
+            let mut byte = (v & 0x7F) as u8;
+            v >>= 7;
+            if v != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+        }
+        Self { value: bytes }
+    }
+
+    pub fn encode(&self) -> Bytes {
+        let mut id = BytesMut::with_capacity(1 + self.value.len());
+        id.extend_from_slice(&[self.value.len() as u8]);
+        id.extend_from_slice(&self.value);
+        id.freeze()
+    }
+
+    pub fn decode(id: &[u8]) -> Result<Self, EncodeError> {
+        if id.is_empty() {
+            return Err(EncodeError::InvalidLength);
+        }
+        let size = id[0];
+        if id.len() < size as usize + 1 {
+            return Err(EncodeError::InvalidLength);
+        }
+        Ok(Self {
+            value: id[1..=size as usize].to_vec(),
+        })
+    }
+}
+
 struct Key<'a> {
-    father_id: u64,
-    current_id: u64,
+    ids: Vec<VariableSizedId>,
     field_key: &'a str,
 }
 
+const SPLITOR: u8 = 0x00;
+
 impl<'a> Key<'a> {
     pub fn encode(&self) -> Bytes {
-        let mut key = BytesMut::with_capacity(8 + 8 + self.field_key.len());
-        key.extend_from_slice(&self.father_id.to_be_bytes());
-        key.extend_from_slice(&self.current_id.to_be_bytes());
+        let mut size = 0;
+        for id in &self.ids {
+            size += id.bytes_len();
+        }
+        let mut key = BytesMut::with_capacity(size + 1 + self.field_key.len());
+        for id in &self.ids {
+            key.extend_from_slice(&id.encode());
+        }
+        key.extend_from_slice(&[SPLITOR]);
         key.extend_from_slice(self.field_key.as_bytes());
         key.freeze()
     }
 
     pub fn decode(key: &'a Bytes) -> Result<Self, EncodeError> {
-        if key.len() <= 16 {
+        let mut ids = Vec::new();
+        let mut remind = &key[0..key.len() - 1];
+        while !remind.is_empty() && remind[0] != SPLITOR {
+            let id_len = remind[0] as usize;
+
+            let id = VariableSizedId::decode(&remind[0..=id_len])?;
+            ids.push(id);
+            remind = &remind[id_len + 1..];
+        }
+        if remind.is_empty() {
             return Err(EncodeError::InvalidLength);
         }
-        let father_id = u64::from_be_bytes([
-            key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
-        ]);
-        let current_id = u64::from_be_bytes([
-            key[8], key[9], key[10], key[11], key[12], key[13], key[14], key[15],
-        ]);
-        let field_key = std::str::from_utf8(&key[16..])?;
-        Ok(Self {
-            father_id,
-            current_id,
-            field_key,
-        })
+        let field_key = std::str::from_utf8(&remind[1..])?;
+        Ok(Self { ids, field_key })
     }
 }
 
@@ -68,8 +124,8 @@ enum NodeValue {
     Bool(bool),
     Number(f64),
     String(Bytes),
-    Array(u64),
-    Object(u64),
+    Array(Bytes),
+    Object(Bytes),
 }
 
 impl NodeValue {
@@ -90,15 +146,15 @@ impl NodeValue {
                 bytes.freeze()
             }
             NodeValue::Array(id) => {
-                let mut bytes = BytesMut::with_capacity(9);
+                let mut bytes = BytesMut::with_capacity(1 + id.len());
                 bytes.extend_from_slice(&[4]);
-                bytes.extend_from_slice(&id.to_be_bytes());
+                bytes.extend_from_slice(id);
                 bytes.freeze()
             }
             NodeValue::Object(id) => {
-                let mut bytes = BytesMut::with_capacity(9);
+                let mut bytes = BytesMut::with_capacity(1 + id.len());
                 bytes.extend_from_slice(&[5]);
-                bytes.extend_from_slice(&id.to_be_bytes());
+                bytes.extend_from_slice(id);
                 bytes.freeze()
             }
         }
@@ -122,24 +178,20 @@ impl NodeValue {
             }
             3 => Ok(NodeValue::String(data.slice(1..))),
             4 => {
-                if data.len() < 9 {
+                if data.len() <= 1 {
                     return Err(EncodeError::InvalidLength);
                 }
-                let id = u64::from_be_bytes([
-                    data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-                ]);
+                let id = data.slice(1..);
                 Ok(NodeValue::Array(id))
             }
             5 => {
-                if data.len() < 9 {
+                if data.len() <= 9 {
                     return Err(EncodeError::InvalidLength);
                 }
-                let id = u64::from_be_bytes([
-                    data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-                ]);
+                let id = data.slice(1..);
                 Ok(NodeValue::Object(id))
             }
-            _ => Err(EncodeError::InvalidLength),
+            _ => Err(EncodeError::InvalidType),
         }
     }
 }

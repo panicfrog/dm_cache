@@ -1,3 +1,5 @@
+use std::error;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -6,4 +8,6 @@ pub enum EncodeError {
     InvalidUtf8(#[from] std::str::Utf8Error),
     #[error("invalid length")]
     InvalidLength,
+    #[error("invalid type")]
+    InvalidType,
 }
