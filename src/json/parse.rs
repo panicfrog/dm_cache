@@ -59,6 +59,23 @@ mod tests {
             }
         }"#
         .to_vec();
-        parse(d.as_mut_slice());
+        parse_and_iter(d.as_mut_slice(), 0, |item, idx| {
+            match item {
+                IterItem::KV((k, v)) => {
+                    println!("{}", k);
+                }
+                IterItem::IV((i, v)) => {
+                    println!("{}", i);
+                }
+                IterItem::String(s) => {
+                    println!("{}", s);
+                }
+                IterItem::Static(s) => {
+                    println!("{:?}", s);
+                }
+            }
+            *idx
+        })
+        .unwrap();
     }
 }
