@@ -1,39 +1,53 @@
 use super::error::JsonError;
 use simd_json::{self, BorrowedValue, StaticNode};
 
-pub enum IterItem<'a> {
-    KV((&'a str, &'a BorrowedValue<'a>)),
-    IV((usize, &'a BorrowedValue<'a>)),
+pub enum IterItem<'a, T> {
+    KV(&'a str),
+    IV(usize),
+    Array(&'a T),
+    Object(&'a T),
     String(&'a str),
     Static(&'a StaticNode),
 }
 
-pub fn parse_and_iter<T, F>(s: &mut [u8], root: T, iter_fn: F) -> Result<(), JsonError>
+pub fn parse_and_iter<T, F>(buf: &mut [u8], root: T, mut iter_fn: F) -> Result<(), JsonError>
 where
-    F: Fn(&IterItem, &T) -> T,
+    F: FnMut(&IterItem<T>, &T) -> T,
 {
-    let v: simd_json::BorrowedValue = simd_json::to_borrowed_value(s)?;
-    // 遍历对象
-    let mut stack = vec![(&v, root)];
-    while let Some((v, t)) = stack.pop() {
-        match v {
+    // 1. 使用 simd_json 解析 JSON
+    let value = simd_json::to_borrowed_value(buf)?;
+
+    // 2. 使用栈进行深度遍历
+    let mut stack = Vec::with_capacity(16);
+    stack.push((&value, root));
+
+    while let Some((node, state)) = stack.pop() {
+        match node {
             BorrowedValue::Object(obj) => {
+                // 遍历对象本身
+                let _ = iter_fn(&IterItem::Object(&state), &state);
+
+                // 遍历其每个 key-value
                 for (k, v) in obj.iter() {
-                    let child_t = iter_fn(&IterItem::KV((&k, &v)), &t);
-                    stack.push((v, child_t));
+                    let child_state = iter_fn(&IterItem::KV(k), &state);
+                    stack.push((v, child_state));
                 }
             }
             BorrowedValue::Array(arr) => {
+                // 遍历数组本身
+                let _ = iter_fn(&IterItem::Array(&state), &state);
+
+                // 遍历其每个元素
                 for (idx, v) in arr.iter().enumerate() {
-                    let child_t = iter_fn(&IterItem::IV((idx, &v)), &t);
-                    stack.push((v, child_t));
+                    let child_state = iter_fn(&IterItem::IV(idx), &state);
+                    stack.push((v, child_state));
                 }
             }
             BorrowedValue::String(s) => {
-                let _ = iter_fn(&IterItem::String(s), &t);
+                iter_fn(&IterItem::String(s), &state);
             }
             BorrowedValue::Static(s) => {
-                let _ = iter_fn(&IterItem::Static(s), &t);
+                iter_fn(&IterItem::Static(s), &state);
             }
         }
     }
@@ -43,9 +57,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
-    fn it_works() {
+    fn test_parse() {
         let mut d = br#"{
             "library": {
                 "books": [
@@ -59,23 +74,61 @@ mod tests {
             }
         }"#
         .to_vec();
-        parse_and_iter(d.as_mut_slice(), 0, |item, idx| {
-            match item {
-                IterItem::KV((k, v)) => {
-                    println!("{}", k);
+        let index = Cell::new(0_u32);
+        parse_and_iter(
+            d.as_mut_slice(),
+            vec![index.get()],
+            |item, idx| match item {
+                IterItem::Array(i) => {
+                    let mut result = Vec::with_capacity(i.len());
+                    println!("{:?} - array", i);
+                    result.extend_from_slice(i);
+                    result
                 }
-                IterItem::IV((i, v)) => {
-                    println!("{}", i);
+                IterItem::Object(i) => {
+                    println!("{:?} - object", i);
+                    let mut result = Vec::with_capacity(i.len());
+                    result.extend_from_slice(i);
+                    result
+                }
+                IterItem::KV(k) => {
+                    index.set(index.get() + 1);
+                    let current_idx = index.get();
+                    let mut idxes = Vec::with_capacity(idx.len() + 1);
+                    idxes.extend_from_slice(idx);
+                    idxes.push(current_idx);
+                    println!("{:?} - {} - kv", idxes, k);
+                    idxes
+                }
+                IterItem::IV(i) => {
+                    index.set(index.get() + 1);
+                    let current_idx = index.get();
+                    let mut idxes = Vec::with_capacity(idx.len() + 1);
+                    idxes.extend_from_slice(idx);
+                    idxes.push(current_idx);
+                    println!("{:?} - {} - iv", idxes, i);
+                    idxes
                 }
                 IterItem::String(s) => {
-                    println!("{}", s);
+                    index.set(index.get() + 1);
+                    let current_idx = index.get();
+                    let mut idxes = Vec::with_capacity(idx.len() + 1);
+                    idxes.extend_from_slice(idx);
+                    idxes.push(current_idx);
+                    println!("{:?} - {}", idxes, s);
+                    idxes
                 }
                 IterItem::Static(s) => {
-                    println!("{:?}", s);
+                    index.set(index.get() + 1);
+                    let current_idx = index.get();
+                    let mut idxes = Vec::with_capacity(idx.len() + 1);
+                    idxes.extend_from_slice(idx);
+                    idxes.push(current_idx);
+                    println!("{:?} - {}", idxes, s);
+                    idxes
                 }
-            }
-            *idx
-        })
+            },
+        )
         .unwrap();
     }
 }
