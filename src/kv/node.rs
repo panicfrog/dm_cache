@@ -119,7 +119,7 @@ impl<'a> Key<'a> {
 
 /// 用于存储JSON数据的节点，使用u8作为类型标识，使用u64作为数据索引
 /// 0 - Null， 1 - Bool， 2 - Number， 3 - String， 4 - Array， 5 - Object
-enum NodeValue {
+pub enum NodeValue {
     Null,
     Bool(bool),
     Number(f64),

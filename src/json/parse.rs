@@ -21,12 +21,16 @@ where
     let mut stack = Vec::with_capacity(16);
     stack.push((&value, root));
 
+    let mut is_root = true;
+
     while let Some((node, state)) = stack.pop() {
         match node {
             BorrowedValue::Object(obj) => {
-                // 遍历对象本身
-                let _ = iter_fn(&IterItem::Object(&state), &state);
-
+                if is_root {
+                    is_root = false;
+                    // 遍历对象本身
+                    let _ = iter_fn(&IterItem::Object(&state), &state);
+                }
                 // 遍历其每个 key-value
                 for (k, v) in obj.iter() {
                     let child_state = iter_fn(&IterItem::KV(k), &state);
@@ -34,9 +38,11 @@ where
                 }
             }
             BorrowedValue::Array(arr) => {
-                // 遍历数组本身
-                let _ = iter_fn(&IterItem::Array(&state), &state);
-
+                if is_root {
+                    is_root = false;
+                    // 遍历数组本身
+                    let _ = iter_fn(&IterItem::Array(&state), &state);
+                }
                 // 遍历其每个元素
                 for (idx, v) in arr.iter().enumerate() {
                     let child_state = iter_fn(&IterItem::IV(idx), &state);
