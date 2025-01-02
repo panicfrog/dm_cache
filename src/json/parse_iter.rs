@@ -1,6 +1,7 @@
 use super::error::JsonError;
 use simd_json::{self, BorrowedValue, StaticNode};
 
+#[derive(Debug)]
 pub enum IterItem<'a, T> {
     KV(&'a str),
     IV(usize),

@@ -1,4 +1,6 @@
 mod error;
-mod parse;
+mod parse_iter;
 mod value;
-pub use value::Value;
+
+pub use parse_iter::*;
+pub use value::*;

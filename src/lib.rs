@@ -2,6 +2,7 @@ mod json;
 mod kv;
 
 use anyhow::Result;
+use bytes::Bytes;
 use parking_lot::RwLock;
 use std::sync::OnceLock;
 use thiserror::Error;
@@ -42,4 +43,14 @@ pub fn get_database() -> Result<&'static RwLock<kv::Store>, DBError> {
             _ => Err(err.clone()),
         },
     }
+}
+
+pub fn insert_json(key: &Bytes, value: &mut [u8]) -> Result<()> {
+    let db = get_database()?;
+    // TODO: 插入 JSON 数据到kv数据库
+    json::parse_and_iter(value, key, |item, state| {
+        print!("{:?}", &item);
+        state
+    })?;
+    Ok(())
 }
