@@ -15,6 +15,12 @@ pub fn init_store<P: AsRef<Path>>(file: &P) -> Result<Store> {
 }
 
 impl Store {
+    pub fn new<P: AsRef<Path>>(file: &P) -> Result<Self, sled::Error> {
+        let tree = sled::open(file)?;
+
+        Ok(Store { tree })
+    }
+
     pub fn get(&self, key: &[u8]) -> Result<Option<NodeValue>> {
         let value = self.tree.get(key)?;
         Ok(value
