@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, Clone, Debug, PartialEq, Eq)]
 pub enum EncodeError {
     #[error("invalid UTF-8 string")]
     InvalidUtf8(#[from] std::str::Utf8Error),

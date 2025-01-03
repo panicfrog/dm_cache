@@ -1,7 +1,4 @@
-use std::{
-    ops::Index,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::{Bytes, BytesMut};
 
@@ -31,7 +28,7 @@ impl AutoIncrementId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableSizedId {
     value: Vec<u8>,
 }
@@ -136,7 +133,7 @@ impl VariableSizedId {
 }
 
 /// 从字节流中读取一个完整的 Varint，返回 (VariableSizedId, 消费了多少字节)
-fn read_variable_sized_id(data: &[u8]) -> Result<(VariableSizedId, usize), EncodeError> {
+pub fn read_variable_sized_id(data: &[u8]) -> Result<(VariableSizedId, usize), EncodeError> {
     let mut bytes = Vec::new();
     let mut consumed = 0;
 
@@ -165,9 +162,16 @@ const SPLITOR: u8 = 0x00;
 pub enum KeyIndex<'a> {
     Id(VariableSizedId),
     Field(&'a str),
+    Root,
 }
 
 impl<'a> KeyIndex<'a> {
+    pub fn is_root(&self) -> bool {
+        match &self {
+            Self::Root => true,
+            _ => false,
+        }
+    }
     pub fn encode(&self) -> Vec<u8> {
         match self {
             KeyIndex::Id(id) => {
@@ -180,6 +184,7 @@ impl<'a> KeyIndex<'a> {
                 bytes.extend_from_slice(field.as_bytes());
                 bytes
             }
+            KeyIndex::Root => vec![0x03],
         }
     }
 
@@ -197,6 +202,7 @@ impl<'a> KeyIndex<'a> {
                 let id = VariableSizedId::decode(&data[1..])?;
                 Ok(KeyIndex::Id(id))
             }
+            0x03 => Ok(KeyIndex::Root),
             _ => Err(EncodeError::InvalidType),
         }
     }
@@ -210,8 +216,8 @@ pub struct Key<'a> {
 
 impl<'a> Key<'a> {
     /// 编码：将所有 ID 依次写入（每个都是自描述的 varint），然后写分隔符，再写 field_key
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
 
         // 写 n 个 self.ids
         for id in &self.ids {
@@ -224,11 +230,11 @@ impl<'a> Key<'a> {
         // 写 field_key
         buf.extend_from_slice(&self.field_key.encode());
 
-        buf.freeze()
+        buf
     }
 
     /// 解码：反复读 varint，直到遇到分隔符；剩余部分为 field_key
-    pub fn decode(bytes: &'a Bytes) -> Result<Self, EncodeError> {
+    pub fn decode(bytes: &'a [u8]) -> Result<Self, EncodeError> {
         let mut ids = Vec::new();
         let mut offset = 0;
 

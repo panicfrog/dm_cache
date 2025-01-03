@@ -35,4 +35,14 @@ impl Store {
         self.tree.insert(key, value.as_ref())?;
         Ok(())
     }
+
+    pub(crate) fn get_raw(&self, key: &[u8]) -> Result<Option<Bytes>, sled::Error> {
+        let value = self.tree.get(key)?;
+        Ok(value.map(|v| Bytes::copy_from_slice(&v)))
+    }
+
+    pub(crate) fn set_raw(&self, key: &[u8], value: &[u8]) -> Result<(), sled::Error> {
+        self.tree.insert(key, value)?;
+        Ok(())
+    }
 }
