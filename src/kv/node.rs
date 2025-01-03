@@ -132,47 +132,91 @@ impl VariableSizedId {
     }
 }
 
-struct Key<'a> {
-    ids: Vec<VariableSizedId>,
-    field_key: &'a str,
+/// 从字节流中读取一个完整的 Varint，返回 (VariableSizedId, 消费了多少字节)
+fn read_variable_sized_id(data: &[u8]) -> Result<(VariableSizedId, usize), EncodeError> {
+    let mut bytes = Vec::new();
+    let mut consumed = 0;
+
+    for &b in data {
+        bytes.push(b);
+        consumed += 1;
+        // 如果最高位=0，则这是最后一个字节
+        if (b & 0x80) == 0 {
+            return Ok((VariableSizedId { value: bytes }, consumed));
+        }
+        // 防止过长溢出
+        if consumed > 10 {
+            return Err(EncodeError::Overflow);
+        }
+        if consumed >= data.len() {
+            return Err(EncodeError::InvalidLength);
+        }
+    }
+
+    Err(EncodeError::InvalidLength)
 }
 
 const SPLITOR: u8 = 0x00;
 
-impl<'a> Key<'a> {
-    pub fn encode(&self) -> Bytes {
-        let mut size = 0;
-        for id in &self.ids {
-            size += id.bytes_len();
-        }
-        let mut key = BytesMut::with_capacity(size + 1 + self.field_key.len());
-        for id in &self.ids {
-            key.extend_from_slice(&id.encode());
-        }
-        key.extend_from_slice(&[SPLITOR]);
-        key.extend_from_slice(self.field_key.as_bytes());
-        key.freeze()
-    }
-
-    pub fn decode(key: &'a Bytes) -> Result<Self, EncodeError> {
-        let mut ids = Vec::new();
-        let mut remind = &key[0..key.len() - 1];
-        while !remind.is_empty() && remind[0] != SPLITOR {
-            let id_len = remind[0] as usize;
-
-            let id = VariableSizedId::decode(&remind[0..=id_len])?;
-            ids.push(id);
-            remind = &remind[id_len + 1..];
-        }
-        if remind.is_empty() {
-            return Err(EncodeError::InvalidLength);
-        }
-        let field_key = std::str::from_utf8(&remind[1..])?;
-        Ok(Self { ids, field_key })
-    }
+/// 这里的 Key 包含：
+pub struct Key<'a> {
+    pub ids: Vec<VariableSizedId>,
+    pub field_key: &'a str,
 }
 
-/// 用于存储JSON数据的节点，使用u8作为类型标识，使用u64作为数据索引
+impl<'a> Key<'a> {
+    /// 编码：将所有 ID 依次写入（每个都是自描述的 varint），然后写分隔符，再写 field_key
+    pub fn encode(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+
+        // 写 n 个 self.ids
+        for id in &self.ids {
+            buf.extend_from_slice(&id.value);
+        }
+
+        // 写分隔符
+        buf.extend_from_slice([SPLITOR].as_ref());
+
+        // 写 field_key
+        buf.extend_from_slice(self.field_key.as_bytes());
+
+        buf.freeze()
+    }
+
+    /// 解码：反复读 varint，直到遇到分隔符；剩余部分为 field_key
+    pub fn decode(bytes: &'a Bytes) -> Result<Self, EncodeError> {
+        let mut ids = Vec::new();
+        let mut offset = 0;
+
+        // 循环读 varint
+        while offset < bytes.len() {
+            // 如果碰到分隔符，就停止
+            if bytes[offset] == SPLITOR {
+                offset += 1;
+                break;
+            }
+
+            // 否则解析一个完整的 varint
+            let (vid, consumed) = read_variable_sized_id(&bytes[offset..])?;
+            offset += consumed;
+            ids.push(vid);
+        }
+
+        // 现在 offset 指向 field_key 或超出边界
+        if offset > bytes.len() {
+            return Err(EncodeError::InvalidLength);
+        }
+
+        let field_key_bytes = &bytes[offset..];
+        let field_key_str =
+            std::str::from_utf8(field_key_bytes).map_err(|e| EncodeError::InvalidUtf8(e))?;
+
+        Ok(Self {
+            ids,
+            field_key: field_key_str,
+        })
+    }
+}
 /// 0 - Null， 1 - Bool， 2 - Number， 3 - String， 4 - Array， 5 - Object
 pub enum NodeValue {
     Null,
@@ -351,5 +395,49 @@ mod tests {
         // 再多加一点就溢出了
         let result = vid_added.checked_add(1);
         assert_eq!(result, Err(EncodeError::Overflow));
+    }
+
+    #[test]
+    fn test_encode_decode_no_ids() {
+        let k = Key {
+            ids: vec![],
+            field_key: "hello",
+        };
+        let encoded = k.encode();
+        let decoded = Key::decode(&encoded).unwrap();
+        assert_eq!(decoded.ids.len(), 0);
+        assert_eq!(decoded.field_key, "hello");
+    }
+
+    #[test]
+    fn test_encode_decode_multiple_ids() {
+        let id1 = VariableSizedId::new(127);
+        let id2 = VariableSizedId::new(300);
+        let id3 = VariableSizedId::new(9999);
+
+        let k = Key {
+            ids: vec![id1.clone(), id2.clone(), id3.clone()],
+            field_key: "rust",
+        };
+
+        let encoded = k.encode();
+        let decoded = Key::decode(&encoded).unwrap();
+        assert_eq!(decoded.ids, vec![id1, id2, id3]);
+        assert_eq!(decoded.field_key, "rust");
+    }
+
+    #[test]
+    fn test_decode_key_invalid_length() {
+        // 构造不完整：只写了一个 varint 的第一个字节(带最高位=1)，没写完
+        let mut buf = BytesMut::new();
+        // 0x81 => 0x01 + 最高位=1，表示还有后续字节，但我们不写后续了
+        buf.extend_from_slice(&[0x81]);
+        let buf = buf.freeze();
+
+        let decoded = Key::decode(&buf);
+        match decoded {
+            Err(EncodeError::InvalidLength) => {}
+            _ => assert!(false),
+        }
     }
 }
