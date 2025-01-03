@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    ops::Index,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use bytes::{Bytes, BytesMut};
 
@@ -158,10 +161,51 @@ fn read_variable_sized_id(data: &[u8]) -> Result<(VariableSizedId, usize), Encod
 
 const SPLITOR: u8 = 0x00;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeyIndex<'a> {
+    Id(VariableSizedId),
+    Field(&'a str),
+}
+
+impl<'a> KeyIndex<'a> {
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            KeyIndex::Id(id) => {
+                let mut bytes = vec![0x02];
+                bytes.extend_from_slice(&id.value);
+                bytes
+            }
+            KeyIndex::Field(field) => {
+                let mut bytes = vec![0x01];
+                bytes.extend_from_slice(field.as_bytes());
+                bytes
+            }
+        }
+    }
+
+    pub fn decode(data: &'a [u8]) -> Result<Self, EncodeError> {
+        if data.is_empty() {
+            return Err(EncodeError::InvalidLength);
+        }
+        match data[0] {
+            0x01 => {
+                let field =
+                    std::str::from_utf8(&data[1..]).map_err(|e| EncodeError::InvalidUtf8(e))?;
+                Ok(KeyIndex::Field(field))
+            }
+            0x02 => {
+                let id = VariableSizedId::decode(&data[1..])?;
+                Ok(KeyIndex::Id(id))
+            }
+            _ => Err(EncodeError::InvalidType),
+        }
+    }
+}
+
 /// 这里的 Key 包含：
 pub struct Key<'a> {
     pub ids: Vec<VariableSizedId>,
-    pub field_key: &'a str,
+    pub field_key: KeyIndex<'a>,
 }
 
 impl<'a> Key<'a> {
@@ -178,7 +222,7 @@ impl<'a> Key<'a> {
         buf.extend_from_slice([SPLITOR].as_ref());
 
         // 写 field_key
-        buf.extend_from_slice(self.field_key.as_bytes());
+        buf.extend_from_slice(&self.field_key.encode());
 
         buf.freeze()
     }
@@ -208,8 +252,7 @@ impl<'a> Key<'a> {
         }
 
         let field_key_bytes = &bytes[offset..];
-        let field_key_str =
-            std::str::from_utf8(field_key_bytes).map_err(|e| EncodeError::InvalidUtf8(e))?;
+        let field_key_str = KeyIndex::decode(field_key_bytes)?;
 
         Ok(Self {
             ids,
@@ -401,12 +444,12 @@ mod tests {
     fn test_encode_decode_no_ids() {
         let k = Key {
             ids: vec![],
-            field_key: "hello",
+            field_key: KeyIndex::Field("hello"),
         };
         let encoded = k.encode();
         let decoded = Key::decode(&encoded).unwrap();
         assert_eq!(decoded.ids.len(), 0);
-        assert_eq!(decoded.field_key, "hello");
+        assert_eq!(decoded.field_key, KeyIndex::Field("hello"));
     }
 
     #[test]
@@ -417,13 +460,13 @@ mod tests {
 
         let k = Key {
             ids: vec![id1.clone(), id2.clone(), id3.clone()],
-            field_key: "rust",
+            field_key: KeyIndex::Field("rust"),
         };
 
         let encoded = k.encode();
         let decoded = Key::decode(&encoded).unwrap();
         assert_eq!(decoded.ids, vec![id1, id2, id3]);
-        assert_eq!(decoded.field_key, "rust");
+        assert_eq!(decoded.field_key, KeyIndex::Field("rust"));
     }
 
     #[test]
