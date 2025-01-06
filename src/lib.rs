@@ -98,10 +98,10 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
     // TODO: 插入 JSON 数据到kv数据库
     json::parse_and_iter(value, k, |item, state| {
         match item {
-            json::IterItem::KV(k) => {
+            json::IterItem::KV(k, item_value) => {
                 println!("KV: {:?}", k);
             }
-            json::IterItem::IV(idx) => {
+            json::IterItem::IV(idx, item_value) => {
                 println!("IV: {:?}", idx);
             }
             json::IterItem::Array(arr) => {

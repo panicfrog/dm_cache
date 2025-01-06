@@ -1,10 +1,19 @@
 use super::error::JsonError;
 use simd_json::{self, BorrowedValue, StaticNode};
 
+
+#[derive(Debug)]
+pub enum ItemValue<'a> {
+    Object,
+    Array,
+    String(&'a str),
+    Static(&'a StaticNode),
+}
+
 #[derive(Debug)]
 pub enum IterItem<'a, T> {
-    KV(&'a str),
-    IV(usize),
+    KV(&'a str, ItemValue<'a>),
+    IV(usize, ItemValue<'a>),
     Array(&'a T),
     Object(&'a T),
     String(&'a str),
@@ -34,8 +43,16 @@ where
                 }
                 // 遍历其每个 key-value
                 for (k, v) in obj.iter() {
-                    let child_state = iter_fn(&IterItem::KV(k), &state);
-                    stack.push((v, child_state));
+                    let (value, is_container) = match v {
+                        BorrowedValue::Object(_) => (ItemValue::Object, true),
+                        BorrowedValue::Array(_) => (ItemValue::Array, true),
+                        BorrowedValue::String(s) => (ItemValue::String(s), false),
+                        BorrowedValue::Static(s) => (ItemValue::Static(s),false),
+                    };
+                    let child_state = iter_fn(&IterItem::KV(k, value), &state);
+                    if is_container {
+                        stack.push((v, child_state));
+                    }
                 }
             }
             BorrowedValue::Array(arr) => {
@@ -46,15 +63,27 @@ where
                 }
                 // 遍历其每个元素
                 for (idx, v) in arr.iter().enumerate() {
-                    let child_state = iter_fn(&IterItem::IV(idx), &state);
-                    stack.push((v, child_state));
+                    let (value, is_container) = match v {
+                        BorrowedValue::Object(_) => (ItemValue::Object, true),
+                        BorrowedValue::Array(_) => (ItemValue::Array, true),
+                        BorrowedValue::String(s) => (ItemValue::String(s), false),
+                        BorrowedValue::Static(s) => (ItemValue::Static(s),false),
+                    };
+                    let child_state = iter_fn(&IterItem::IV(idx, value), &state);
+                    if is_container {
+                        stack.push((v, child_state));
+                    }
                 }
             }
             BorrowedValue::String(s) => {
-                iter_fn(&IterItem::String(s), &state);
+                if is_root {
+                    iter_fn(&IterItem::String(s), &state);
+                }
             }
             BorrowedValue::Static(s) => {
-                iter_fn(&IterItem::Static(s), &state);
+                if is_root {
+                    iter_fn(&IterItem::Static(s), &state);
+                }
             }
         }
     }
@@ -65,6 +94,15 @@ where
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    fn item_value_description(value: &ItemValue) -> String {
+        match value {
+            ItemValue::Object => "Object".to_string(),
+            ItemValue::Array => "Array".to_string(),
+            ItemValue::String(s) => format!("String: {}", s),
+            ItemValue::Static(s) => format!("Static: {:?}", s),
+        }
+    }
 
     #[test]
     fn test_parse() {
@@ -98,22 +136,22 @@ mod tests {
                     result.extend_from_slice(i);
                     result
                 }
-                IterItem::KV(k) => {
+                IterItem::KV(k, value) => {
                     index.set(index.get() + 1);
                     let current_idx = index.get();
                     let mut idxes = Vec::with_capacity(idx.len() + 1);
                     idxes.extend_from_slice(idx);
                     idxes.push(current_idx);
-                    println!("{:?} - {} - kv", idxes, k);
+                    println!("{:?} - {} - {} - kv", idxes, k, item_value_description(value));
                     idxes
                 }
-                IterItem::IV(i) => {
+                IterItem::IV(i, value) => {
                     index.set(index.get() + 1);
                     let current_idx = index.get();
                     let mut idxes = Vec::with_capacity(idx.len() + 1);
                     idxes.extend_from_slice(idx);
                     idxes.push(current_idx);
-                    println!("{:?} - {} - iv", idxes, i);
+                    println!("{:?} - {} - {} - iv", idxes, i, item_value_description(value));
                     idxes
                 }
                 IterItem::String(s) => {

@@ -300,6 +300,15 @@ impl Key {
         buf.push(SPLITOR);
         buf
     }
+
+    pub fn sub_key(&self, id: VariableSizedId, index: KeyIndex) -> Self {
+        // 1. 生成新的 ids
+        let mut ids = self.ids.clone();
+        ids.push(id);
+        // 2. 生成新的 field_key
+        let field_key = index;
+        Self { ids, field_key }
+    }
 }
 /// 0 - Null， 1 - Bool， 2 - Number， 3 - String， 4 - Array， 5 - Object
 pub enum NodeValue {
