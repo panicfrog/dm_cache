@@ -159,19 +159,34 @@ pub fn read_variable_sized_id(data: &[u8]) -> Result<(VariableSizedId, usize), E
 const SPLITOR: u8 = 0x00;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum KeyIndex<'a> {
+pub enum KeyIndex {
     Id(VariableSizedId),
-    Field(&'a str),
+    Field(Bytes),
     Root,
 }
 
-impl<'a> KeyIndex<'a> {
+impl KeyIndex {
     pub fn is_root(&self) -> bool {
         match &self {
             Self::Root => true,
             _ => false,
         }
     }
+
+    pub fn is_id(&self) -> bool {
+        match &self {
+            Self::Id(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_field(&self) -> bool {
+        match &self {
+            Self::Field(_) => true,
+            _ => false,
+        }
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         match self {
             KeyIndex::Id(id) => {
@@ -181,14 +196,14 @@ impl<'a> KeyIndex<'a> {
             }
             KeyIndex::Field(field) => {
                 let mut bytes = vec![0x01];
-                bytes.extend_from_slice(field.as_bytes());
+                bytes.extend_from_slice(field.as_ref());
                 bytes
             }
             KeyIndex::Root => vec![0x03],
         }
     }
 
-    pub fn decode(data: &'a [u8]) -> Result<Self, EncodeError> {
+    pub fn decode(data: &[u8]) -> Result<Self, EncodeError> {
         if data.is_empty() {
             return Err(EncodeError::InvalidLength);
         }
@@ -196,7 +211,7 @@ impl<'a> KeyIndex<'a> {
             0x01 => {
                 let field =
                     std::str::from_utf8(&data[1..]).map_err(|e| EncodeError::InvalidUtf8(e))?;
-                Ok(KeyIndex::Field(field))
+                Ok(KeyIndex::Field(Bytes::copy_from_slice(field.as_bytes())))
             }
             0x02 => {
                 let id = VariableSizedId::decode(&data[1..])?;
@@ -208,13 +223,14 @@ impl<'a> KeyIndex<'a> {
     }
 }
 
-/// 这里的 Key 包含：
-pub struct Key<'a> {
+/// 这里的 Key 包含：多个 ID 和一个 Field Key, ids = <super node id> + <current id>
+#[derive(Debug)]
+pub struct Key {
     pub ids: Vec<VariableSizedId>,
-    pub field_key: KeyIndex<'a>,
+    pub field_key: KeyIndex,
 }
 
-impl<'a> Key<'a> {
+impl Key {
     /// 编码：将所有 ID 依次写入（每个都是自描述的 varint），然后写分隔符，再写 field_key
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -234,7 +250,7 @@ impl<'a> Key<'a> {
     }
 
     /// 解码：反复读 varint，直到遇到分隔符；剩余部分为 field_key
-    pub fn decode(bytes: &'a [u8]) -> Result<Self, EncodeError> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, EncodeError> {
         let mut ids = Vec::new();
         let mut offset = 0;
 
@@ -265,6 +281,25 @@ impl<'a> Key<'a> {
             field_key: field_key_str,
         })
     }
+
+    pub fn super_id_prefix(&self) -> Vec<u8> {
+        // 只取前 n-1 个 id + SPLITOR
+        // 1. 计算长度
+        let len = self
+            .ids
+            .iter()
+            .take(self.ids.len() - 1)
+            .map(|id| id.bytes_len())
+            .sum::<usize>();
+        let mut buf = Vec::with_capacity(len + 1);
+        // 2. 写入前 n-1 个 id
+        for id in self.ids.iter().take(self.ids.len() - 1) {
+            buf.extend_from_slice(&id.value);
+        }
+        // 3. 写入分隔符
+        buf.push(SPLITOR);
+        buf
+    }
 }
 /// 0 - Null， 1 - Bool， 2 - Number， 3 - String， 4 - Array， 5 - Object
 pub enum NodeValue {
@@ -272,11 +307,17 @@ pub enum NodeValue {
     Bool(bool),
     Number(f64),
     String(Bytes),
-    Array(Bytes),
-    Object(Bytes),
+    Array,
+    Object,
 }
 
 impl NodeValue {
+    pub fn is_object(&self) -> bool {
+        matches!(self, NodeValue::Object)
+    }
+    pub fn is_array(&self) -> bool {
+        matches!(self, NodeValue::Array)
+    }
     pub fn encode(&self) -> Bytes {
         match self {
             NodeValue::Null => Bytes::from_static(&[0]),
@@ -293,16 +334,14 @@ impl NodeValue {
                 bytes.extend_from_slice(s);
                 bytes.freeze()
             }
-            NodeValue::Array(id) => {
-                let mut bytes = BytesMut::with_capacity(1 + id.len());
+            NodeValue::Array => {
+                let mut bytes = BytesMut::with_capacity(1);
                 bytes.extend_from_slice(&[4]);
-                bytes.extend_from_slice(id);
                 bytes.freeze()
             }
-            NodeValue::Object(id) => {
-                let mut bytes = BytesMut::with_capacity(1 + id.len());
+            NodeValue::Object => {
+                let mut bytes = BytesMut::with_capacity(1);
                 bytes.extend_from_slice(&[5]);
-                bytes.extend_from_slice(id);
                 bytes.freeze()
             }
         }
@@ -325,20 +364,8 @@ impl NodeValue {
                 Ok(NodeValue::Number(n))
             }
             3 => Ok(NodeValue::String(data.slice(1..))),
-            4 => {
-                if data.len() <= 1 {
-                    return Err(EncodeError::InvalidLength);
-                }
-                let id = data.slice(1..);
-                Ok(NodeValue::Array(id))
-            }
-            5 => {
-                if data.len() <= 9 {
-                    return Err(EncodeError::InvalidLength);
-                }
-                let id = data.slice(1..);
-                Ok(NodeValue::Object(id))
-            }
+            4 => Ok(NodeValue::Array),
+            5 => Ok(NodeValue::Object),
             _ => Err(EncodeError::InvalidType),
         }
     }
@@ -450,12 +477,15 @@ mod tests {
     fn test_encode_decode_no_ids() {
         let k = Key {
             ids: vec![],
-            field_key: KeyIndex::Field("hello"),
+            field_key: KeyIndex::Field(Bytes::copy_from_slice(b"hello")),
         };
         let encoded = k.encode();
         let decoded = Key::decode(&encoded).unwrap();
         assert_eq!(decoded.ids.len(), 0);
-        assert_eq!(decoded.field_key, KeyIndex::Field("hello"));
+        assert_eq!(
+            decoded.field_key,
+            KeyIndex::Field(Bytes::copy_from_slice(b"hello"))
+        );
     }
 
     #[test]
@@ -466,13 +496,16 @@ mod tests {
 
         let k = Key {
             ids: vec![id1.clone(), id2.clone(), id3.clone()],
-            field_key: KeyIndex::Field("rust"),
+            field_key: KeyIndex::Field(Bytes::copy_from_slice(b"rust")),
         };
 
         let encoded = k.encode();
         let decoded = Key::decode(&encoded).unwrap();
         assert_eq!(decoded.ids, vec![id1, id2, id3]);
-        assert_eq!(decoded.field_key, KeyIndex::Field("rust"));
+        assert_eq!(
+            decoded.field_key,
+            KeyIndex::Field(Bytes::copy_from_slice(b"rust"))
+        );
     }
 
     #[test]

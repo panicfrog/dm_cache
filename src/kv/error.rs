@@ -11,3 +11,11 @@ pub enum EncodeError {
     #[error("invalid value")]
     Overflow,
 }
+
+#[derive(Error, Clone, Debug, PartialEq, Eq)]
+pub enum StoreError {
+    #[error("sled error: {0}")]
+    SledError(#[from] sled::Error),
+    #[error("encode error: {0}")]
+    EncodeError(#[from] EncodeError),
+}

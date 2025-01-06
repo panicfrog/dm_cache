@@ -2,7 +2,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use std::path::Path;
 
-use super::node::NodeValue;
+use super::{node::NodeValue, EncodeError, Key, StoreError};
 
 pub struct Store {
     tree: sled::Db,
@@ -34,6 +34,23 @@ impl Store {
         let value = value.encode();
         self.tree.insert(key, value.as_ref())?;
         Ok(())
+    }
+
+    pub fn get_super_node(&self, current: &Key) -> Result<Option<(Key, NodeValue)>, StoreError> {
+        let current_key_raw = current.super_id_prefix();
+        let mut iter = self.tree.range(current_key_raw..);
+
+        let super_kv = iter.next().transpose()?;
+        let (k, v) = if let Some(kv) = super_kv {
+            kv
+        } else {
+            return Ok(None);
+        };
+        let key = Key::decode(&k).map_err(|e| StoreError::EncodeError(e))?;
+        let node_value = NodeValue::decode(&Bytes::copy_from_slice(&v))
+            .map_err(|e| StoreError::EncodeError(e))?;
+
+        Ok(Some((key, node_value)))
     }
 
     pub(crate) fn get_raw(&self, key: &[u8]) -> Result<Option<Bytes>, sled::Error> {

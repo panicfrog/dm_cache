@@ -21,6 +21,8 @@ pub enum DBError {
     DuplicateRootKey,
     #[error("No super node")]
     NoSuperNode,
+    #[error("Invalid type of super node")]
+    InvalidSuperNodeType,
 }
 
 pub struct Database {
@@ -79,11 +81,47 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
         if k.ids.len() < 2 {
             return Err(DBError::NoSuperNode)?;
         }
+        let (_, super_value) = if let Some(kv) = db.store.get_super_node(&k)? {
+            kv
+        } else {
+            return Err(DBError::NoSuperNode)?;
+        };
+        // 如果父节点是object，那么子节点只能是field
+        if k.field_key.is_field() && !super_value.is_object() {
+            return Err(DBError::InvalidSuperNodeType)?;
+        }
+        // 如果父节点是array，那么子节点只能是id
+        if k.field_key.is_id() && !super_value.is_array() {
+            return Err(DBError::InvalidSuperNodeType)?;
+        }
     }
     // TODO: 插入 JSON 数据到kv数据库
-    json::parse_and_iter(value, key, |item, state| {
+    json::parse_and_iter(value, k, |item, state| {
+        match item {
+            json::IterItem::KV(k) => {
+                println!("KV: {:?}", k);
+            }
+            json::IterItem::IV(idx) => {
+                println!("IV: {:?}", idx);
+            }
+            json::IterItem::Array(arr) => {
+                println!("Array: {:?}", arr);
+            }
+            json::IterItem::Object(obj) => {
+                println!("Object: {:?}", obj);
+            }
+            json::IterItem::String(s) => {
+                println!("String: {:?}", s);
+            }
+            json::IterItem::Static(s) => {
+                println!("Static: {:?}", s);
+            }
+        }
         print!("{:?}", &item);
-        state
+        kv::Key {
+            ids: state.ids.clone(),
+            field_key: kv::KeyIndex::Root,
+        }
     })?;
     Ok(())
 }
