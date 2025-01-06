@@ -158,7 +158,7 @@ pub fn read_variable_sized_id(data: &[u8]) -> Result<(VariableSizedId, usize), E
 
 const SPLITOR: u8 = 0x00;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyIndex {
     Id(VariableSizedId),
     Field(Bytes),
@@ -224,7 +224,7 @@ impl KeyIndex {
 }
 
 /// 这里的 Key 包含：多个 ID 和一个 Field Key, ids = <super node id> + <current id>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Key {
     pub ids: Vec<VariableSizedId>,
     pub field_key: KeyIndex,

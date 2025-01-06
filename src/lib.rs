@@ -3,8 +3,10 @@ mod json;
 mod kv;
 
 use anyhow::Result;
+use bytes::Bytes;
+use kv::VariableSizedId;
 use parking_lot::RwLock;
-use std::sync::OnceLock;
+use std::{ops::Deref, sync::OnceLock};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -99,28 +101,39 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
     json::parse_and_iter(value, k, |item, state| {
         match item {
             json::IterItem::KV(k, item_value) => {
+                metadata.last_id += 1;
+                let sub_key = state.sub_key(VariableSizedId::new(metadata.last_id), kv::KeyIndex::Field(Bytes::copy_from_slice(k.as_bytes())));
+                // TODO: store item_value
                 println!("KV: {:?}", k);
+                sub_key
             }
             json::IterItem::IV(idx, item_value) => {
+                metadata.last_id += 1;
+                let sub_key = state.sub_key(VariableSizedId::new(metadata.last_id), kv::KeyIndex::Id(VariableSizedId::new(idx.clone() as u64)));
+                // TODO: store item_value
                 println!("IV: {:?}", idx);
+                sub_key
             }
-            json::IterItem::Array(arr) => {
-                println!("Array: {:?}", arr);
+            json::IterItem::Array(arr_key) => {
+                // TODO: store Array as value
+                println!("Array: {:?}", arr_key);
+                (*arr_key).clone()
             }
             json::IterItem::Object(obj) => {
+                // TODO: store Object as value
                 println!("Object: {:?}", obj);
+                (*obj).clone()
             }
             json::IterItem::String(s) => {
+                // TODO: store String as value
                 println!("String: {:?}", s);
+                state.clone()
             }
             json::IterItem::Static(s) => {
+                // TODO: store Static as value
                 println!("Static: {:?}", s);
+                state.clone()
             }
-        }
-        print!("{:?}", &item);
-        kv::Key {
-            ids: state.ids.clone(),
-            field_key: kv::KeyIndex::Root,
         }
     })?;
     Ok(())
