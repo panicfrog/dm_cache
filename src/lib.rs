@@ -4,8 +4,10 @@ mod kv;
 
 use anyhow::Result;
 use bytes::Bytes;
-use kv::VariableSizedId;
+use json::ItemValue;
+use kv::{NodeValue, VariableSizedId};
 use parking_lot::RwLock;
+use simd_json::{Node, StaticNode};
 use std::{ops::Deref, sync::OnceLock};
 use thiserror::Error;
 
@@ -98,41 +100,116 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
         }
     }
     // TODO: 插入 JSON 数据到kv数据库
-    json::parse_and_iter(value, k, |item, state| {
+    json::parse_and_iter(value, k, |item, node_key| {
+        let raw_node_key = node_key.encode();
         match item {
             json::IterItem::KV(k, item_value) => {
                 metadata.last_id += 1;
-                let sub_key = state.sub_key(VariableSizedId::new(metadata.last_id), kv::KeyIndex::Field(Bytes::copy_from_slice(k.as_bytes())));
+                let sub_key = node_key.sub_key(VariableSizedId::new(metadata.last_id), kv::KeyIndex::Field(Bytes::copy_from_slice(k.as_bytes())));
                 // TODO: store item_value
                 println!("KV: {:?}", k);
+                let node_value = match item_value {
+                    ItemValue::Array => {
+                        NodeValue::Array
+                    }
+                    ItemValue::Object => {
+                        NodeValue::Array
+                    }
+                    ItemValue::String(s) => {
+                        NodeValue::String(Bytes::copy_from_slice(s.as_bytes()))
+                    }
+                    ItemValue::Static(StaticNode::Bool(b)) => {
+                        NodeValue::Bool(*b)
+                    }
+                    ItemValue::Static(StaticNode::F64(f)) => {
+                        NodeValue::Number(*f)
+                    }
+                    ItemValue::Static(StaticNode::I64(i)) => {
+                        NodeValue::NumberI(*i)
+                    }
+                    ItemValue::Static(StaticNode::U64(u)) => {
+                        NodeValue::NumberU(*u)
+                    }
+                    ItemValue::Static(StaticNode::Null) => {
+                        NodeValue::Null
+                    }
+                };
+                let raw_node_value = node_value.encode();
                 sub_key
             }
             json::IterItem::IV(idx, item_value) => {
                 metadata.last_id += 1;
-                let sub_key = state.sub_key(VariableSizedId::new(metadata.last_id), kv::KeyIndex::Id(VariableSizedId::new(idx.clone() as u64)));
+                let sub_key = node_key.sub_key(VariableSizedId::new(metadata.last_id), kv::KeyIndex::Id(VariableSizedId::new(idx.clone() as u64)));
                 // TODO: store item_value
+                let node_value = match item_value {
+                    ItemValue::Array => {
+                        NodeValue::Array
+                    }
+                    ItemValue::Object => {
+                        NodeValue::Array
+                    }
+                    ItemValue::String(s) => {
+                        NodeValue::String(Bytes::copy_from_slice(s.as_bytes()))
+                    }
+                    ItemValue::Static(StaticNode::Bool(b)) => {
+                        NodeValue::Bool(*b)
+                    }
+                    ItemValue::Static(StaticNode::F64(f)) => {
+                        NodeValue::Number(*f)
+                    }
+                    ItemValue::Static(StaticNode::I64(i)) => {
+                        NodeValue::NumberI(*i)
+                    }
+                    ItemValue::Static(StaticNode::U64(u)) => {
+                        NodeValue::NumberU(*u)
+                    }
+                    ItemValue::Static(StaticNode::Null) => {
+                        NodeValue::Null
+                    }
+                };
+                let raw_node_value = node_value.encode();
                 println!("IV: {:?}", idx);
                 sub_key
             }
             json::IterItem::Array(arr_key) => {
                 // TODO: store Array as value
-                println!("Array: {:?}", arr_key);
+                let node_value = NodeValue::Array;
+                let raw_node_value = node_value.encode();
                 (*arr_key).clone()
             }
             json::IterItem::Object(obj) => {
                 // TODO: store Object as value
-                println!("Object: {:?}", obj);
+                let node_value = NodeValue::Object;
+                let raw_node_value = node_value.encode();
                 (*obj).clone()
             }
             json::IterItem::String(s) => {
                 // TODO: store String as value
-                println!("String: {:?}", s);
-                state.clone()
+                let node_value = NodeValue::String(Bytes::copy_from_slice(s.as_bytes()));
+                let raw_node_value = node_value.encode();
+                node_key.clone()
             }
             json::IterItem::Static(s) => {
                 // TODO: store Static as value
-                println!("Static: {:?}", s);
-                state.clone()
+                let node_value = match s {
+                    StaticNode::Bool(b) => {
+                        NodeValue::Bool(*b)
+                    }
+                    StaticNode::F64(f) => {
+                       NodeValue::Number(*f) 
+                    }
+                    StaticNode::I64(i) => {
+                        NodeValue::NumberI(*i)
+                    }
+                    StaticNode::U64(u) => {
+                        NodeValue::NumberU(*u)
+                    }
+                    StaticNode::Null => {
+                        NodeValue::Null
+                    }
+                };
+                let raw_node_value = node_value.encode();
+                node_key.clone()
             }
         }
     })?;

@@ -310,11 +310,13 @@ impl Key {
         Self { ids, field_key }
     }
 }
-/// 0 - Null， 1 - Bool， 2 - Number， 3 - String， 4 - Array， 5 - Object
+/// 0 - Null， 1 - Bool， 2 - Number，3 NumberI, 4, NumberU 5 - String， 6 - Array， 7 - Object
 pub enum NodeValue {
     Null,
     Bool(bool),
     Number(f64),
+    NumberI(i64),
+    NumberU(u64),
     String(Bytes),
     Array,
     Object,
@@ -335,6 +337,18 @@ impl NodeValue {
                 let mut bytes = BytesMut::with_capacity(9);
                 bytes.extend_from_slice(&[2]);
                 bytes.extend_from_slice(&n.to_be_bytes());
+                bytes.freeze()
+            }
+            NodeValue::NumberI(i) => {
+                let mut bytes = BytesMut::with_capacity(9);
+                bytes.extend_from_slice(&[3]);
+                bytes.extend_from_slice(&i.to_be_bytes());
+                bytes.freeze()
+            }
+            NodeValue::NumberU(u) => {
+                let mut bytes = BytesMut::with_capacity(9);
+                bytes.extend_from_slice(&[4]);
+                bytes.extend_from_slice(&u.to_be_bytes());
                 bytes.freeze()
             }
             NodeValue::String(s) => {
@@ -372,9 +386,27 @@ impl NodeValue {
                 ]);
                 Ok(NodeValue::Number(n))
             }
-            3 => Ok(NodeValue::String(data.slice(1..))),
-            4 => Ok(NodeValue::Array),
-            5 => Ok(NodeValue::Object),
+            3 => {
+                if data.len() < 9 {
+                    return Err(EncodeError::InvalidLength);
+                }
+                let n = i64::from_be_bytes([
+                    data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
+                ]);
+                Ok(NodeValue::NumberI(n))
+            }
+            4 => {
+                if data.len() < 9 {
+                    return Err(EncodeError::InvalidLength);
+                }
+                let n = u64::from_be_bytes([
+                    data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
+                ]);
+                Ok(NodeValue::NumberU(n))
+            }
+            5 => Ok(NodeValue::String(data.slice(1..))),
+            6 => Ok(NodeValue::Array),
+            7 => Ok(NodeValue::Object),
             _ => Err(EncodeError::InvalidType),
         }
     }
