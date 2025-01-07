@@ -102,7 +102,7 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
     // TODO: 插入 JSON 数据到kv数据库
     json::parse_and_iter(value, k, |item, node_key| {
         let raw_node_key = node_key.encode();
-        match item {
+        let (sub_key, raw_node_value) = match item {
             json::IterItem::KV(k, item_value) => {
                 metadata.last_id += 1;
                 let sub_key = node_key.sub_key(VariableSizedId::new(metadata.last_id), kv::KeyIndex::Field(Bytes::copy_from_slice(k.as_bytes())));
@@ -135,7 +135,7 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
                     }
                 };
                 let raw_node_value = node_value.encode();
-                sub_key
+                (sub_key, raw_node_value)
             }
             json::IterItem::IV(idx, item_value) => {
                 metadata.last_id += 1;
@@ -169,25 +169,25 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
                 };
                 let raw_node_value = node_value.encode();
                 println!("IV: {:?}", idx);
-                sub_key
+                (sub_key, raw_node_value)
             }
             json::IterItem::Array(arr_key) => {
                 // TODO: store Array as value
                 let node_value = NodeValue::Array;
                 let raw_node_value = node_value.encode();
-                (*arr_key).clone()
+                ((*arr_key).clone(), raw_node_value)
             }
             json::IterItem::Object(obj) => {
                 // TODO: store Object as value
                 let node_value = NodeValue::Object;
                 let raw_node_value = node_value.encode();
-                (*obj).clone()
+                ((*obj).clone(), raw_node_value)
             }
             json::IterItem::String(s) => {
                 // TODO: store String as value
                 let node_value = NodeValue::String(Bytes::copy_from_slice(s.as_bytes()));
                 let raw_node_value = node_value.encode();
-                node_key.clone()
+                (node_key.clone(), raw_node_value)
             }
             json::IterItem::Static(s) => {
                 // TODO: store Static as value
@@ -209,9 +209,10 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
                     }
                 };
                 let raw_node_value = node_value.encode();
-                node_key.clone()
+                (node_key.clone(), raw_node_value)
             }
-        }
+        };
+        sub_key
     })?;
     Ok(())
 }
