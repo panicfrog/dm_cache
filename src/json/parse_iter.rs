@@ -29,77 +29,55 @@ pub enum IterItem2<'a> {
     Static(&'a StaticNode),
 }
 
-///
-/// 这是我们的迭代器结构：
-/// - `stack` 存的是“下一步要遍历的节点 + 这个节点对应的状态 T”
-/// - `iter_fn` 是用户给的闭包：`FnMut(&IterItem, &T) -> Result<T, E>`
-/// - `is_root` 用来标识下次弹出的是否是 root
-/// - `error` 存储了一旦出现的错误，如果有的话，迭代器会停止产出新的节点
-///
-pub struct JsonDfsIter<'a, T, E, F>
+/// 带状态的 DFS 迭代器，不再返回错误。
+pub struct JsonDfsIter<'a, T, F>
 where
     T: 'a,
-    F: FnMut(&'a IterItem2<'a>, &'a T) -> Result<T, E>,
+    F: FnMut(&'a IterItem2<'a>, &T) -> T,
 {
     stack: Vec<(&'a BorrowedValue<'a>, T)>,
     iter_fn: F,
     is_root: bool,
-    error: Option<E>,
 }
 
-impl<'a, T, E, F> JsonDfsIter<'a, T, E, F>
+/// 跟你示例类似的构造方法
+impl<'a, T, F> JsonDfsIter<'a, T, F>
 where
-    F: FnMut(&IterItem2<'a>, &T) -> Result<T, E>,
+    T: 'a,
+    F: FnMut(&IterItem2<'a>, &T) -> T,
 {
     pub fn new(root_value: &'a BorrowedValue<'a>, root_state: T, iter_fn: F) -> Self {
         Self {
             stack: vec![(root_value, root_state)],
             iter_fn,
             is_root: true,
-            error: None,
         }
     }
 }
-
-impl<'a, T, E, F> Iterator for JsonDfsIter<'a, T, E, F>
+impl<'a, T, F> Iterator for JsonDfsIter<'a, T, F>
 where
-    F: FnMut(&IterItem2<'a>, &T) -> Result<T, E>,
+    T: 'a,
+    F: FnMut(&IterItem2<'a>, &T) -> T,
 {
-    type Item = Result<(IterItem2<'a>, T), E>;
+    // 不返回错误，直接产出一个 (IterItem2, T)
+    type Item = (IterItem2<'a>, T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // 如果之前已经出错了，后面都不再产出了
-        if self.error.is_some() {
-            return None;
-        }
-
-        // 没有可遍历的节点了
+        // 如果 stack 里没东西，就结束
         let (node, state) = self.stack.pop()?;
 
-        // 封装一个辅助函数，用来调用闭包并在出错时记录错误
-        let mut call_iter_fn = |item: IterItem2<'a>, s: &T| -> Option<T> {
-            match (self.iter_fn)(&item, s) {
-                Ok(child_state) => Some(child_state),
-                Err(e) => {
-                    self.error = Some(e);
-                    None
-                }
-            }
-        };
+        // 闭包的辅助调用函数，不再处理任何错误，直接返回新状态
+        let mut call_iter_fn = |item: IterItem2<'a>, s: &T| -> T { (self.iter_fn)(&item, s) };
 
         match node {
             BorrowedValue::Object(obj) => {
-                // 如果是 root，就先产出一次 "Object(&root_state)"
+                // 如果是 root，就先对“Object”调用闭包
                 if self.is_root {
                     self.is_root = false;
-                    // 调用闭包
                     let root_item = IterItem2::Object;
-                    if call_iter_fn(root_item, &state).is_none() {
-                        return Some(Err(self.error.take().unwrap()));
-                    }
+                    let _new_state = call_iter_fn(root_item, &state);
                 }
 
-                // 遍历子节点 (k,v)
                 for (k, v) in obj.iter() {
                     let (value, is_container) = match v {
                         BorrowedValue::Object(_) => (ItemValue::Object, true),
@@ -108,32 +86,30 @@ where
                         BorrowedValue::Static(s) => (ItemValue::Static(s), false),
                     };
 
-                    // KV 的 iter_item
                     let kv_item = IterItem2::KV(k, value);
-                    // 调用闭包
-                    let child_state = match call_iter_fn(kv_item, &state) {
-                        Some(cs) => cs,
-                        None => {
-                            return Some(Err(self.error.take().unwrap()));
-                        }
-                    };
-                    // if is_container {
-                    self.stack.push((v, child_state));
-                    // }
+                    // 为子节点生成新状态
+                    let child_state = call_iter_fn(kv_item, &state);
+
+                    // 如果是容器，就推进栈；
+                    if is_container {
+                        self.stack.push((v, child_state));
+                    } else {
+                        // 如果不是容器，那就也 push 一次，这样下次 next()
+                        // 依然能把这个值 yield 给外部
+                        self.stack.push((v, child_state));
+                    }
                 }
 
-                // 最后我们产出一条 (IterItem::Object(&state), state)
-                // 也可以只在 root 的时候产出；看你业务需求
-                Some(Ok((IterItem2::Object, state)))
+                // 最后返回一条：这里我们就产出 `Object` + `state`
+                // 你也可以不产出，或者产出新状态，看业务需求
+                Some((IterItem2::Object, state))
             }
 
             BorrowedValue::Array(arr) => {
                 if self.is_root {
                     self.is_root = false;
                     let root_item = IterItem2::Array;
-                    if call_iter_fn(root_item, &state).is_none() {
-                        return Some(Err(self.error.take().unwrap()));
-                    }
+                    let _new_state = call_iter_fn(root_item, &state);
                 }
 
                 for (idx, v) in arr.iter().enumerate() {
@@ -144,40 +120,33 @@ where
                         BorrowedValue::Static(s) => (ItemValue::Static(s), false),
                     };
                     let iv_item = IterItem2::IV(idx, value);
-                    let child_state = match call_iter_fn(iv_item, &state) {
-                        Some(cs) => cs,
-                        None => {
-                            return Some(Err(self.error.take().unwrap()));
-                        }
-                    };
-                    // if is_container {
-                    self.stack.push((v, child_state));
-                    // }
-                }
+                    let child_state = call_iter_fn(iv_item, &state);
 
-                Some(Ok((IterItem2::Array, state)))
+                    if is_container {
+                        self.stack.push((v, child_state));
+                    } else {
+                        self.stack.push((v, child_state));
+                    }
+                }
+                Some((IterItem2::Array, state))
             }
 
             BorrowedValue::String(s) => {
                 if self.is_root {
                     self.is_root = false;
                     let root_item = IterItem2::String(s);
-                    if call_iter_fn(root_item, &state).is_none() {
-                        return Some(Err(self.error.take().unwrap()));
-                    }
+                    let _new_state = call_iter_fn(root_item, &state);
                 }
-                Some(Ok((IterItem2::String(s), state)))
+                Some((IterItem2::String(s), state))
             }
 
             BorrowedValue::Static(s) => {
                 if self.is_root {
                     self.is_root = false;
                     let root_item = IterItem2::Static(&s);
-                    if call_iter_fn(root_item, &state).is_none() {
-                        return Some(Err(self.error.take().unwrap()));
-                    }
+                    let _new_state = call_iter_fn(root_item, &state);
                 }
-                Some(Ok((IterItem2::Static(&s), state)))
+                Some((IterItem2::Static(&s), state))
             }
         }
     }
@@ -285,15 +254,14 @@ mod tests {
         let index = Cell::new(0_u32);
         let value = simd_json::to_borrowed_value(d.as_mut_slice()).unwrap();
         let json_iter = JsonDfsIter::new(&value, vec![index.get()], |iter_item, key| {
-            let mut result: Result<Vec<u32>, JsonError> = Ok(vec![]);
-            result = match iter_item {
+            let result = match iter_item {
                 IterItem2::KV(k, value) => {
                     index.set(index.get() + 1);
                     let current_idx = index.get();
                     let mut idxes = Vec::with_capacity(key.len() + 1);
                     idxes.extend_from_slice(key);
                     idxes.push(current_idx);
-                    Ok(idxes)
+                    idxes
                 }
                 IterItem2::IV(i, value) => {
                     index.set(index.get() + 1);
@@ -301,34 +269,34 @@ mod tests {
                     let mut idxes = Vec::with_capacity(key.len() + 1);
                     idxes.extend_from_slice(key);
                     idxes.push(current_idx);
-                    Ok(idxes)
+                    idxes
                 }
                 IterItem2::Array => {
                     let mut ids = Vec::with_capacity(key.len());
                     ids.extend_from_slice(key);
-                    Ok(ids)
+                    ids
                 }
                 IterItem2::Object => {
                     let mut ids = Vec::with_capacity(key.len());
                     ids.extend_from_slice(key);
-                    Ok(ids)
+                    ids
                 }
                 IterItem2::String(s) => {
                     let mut ids = Vec::with_capacity(key.len());
                     ids.extend_from_slice(key);
-                    Ok(ids)
+                    ids
                 }
                 IterItem2::Static(s) => {
                     let mut ids = Vec::with_capacity(key.len());
                     ids.extend_from_slice(key);
-                    Ok(ids)
+                    ids
                 }
             };
             result
         });
 
-        for item in json_iter {
-            println!("{:?}", item);
+        for (item, key) in json_iter {
+            println!("{:?} - {:?}", key, item);
         }
     }
 
