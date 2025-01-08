@@ -40,7 +40,6 @@ where
     is_root: bool,
 }
 
-/// 跟你示例类似的构造方法
 impl<'a, T, F> JsonDfsIter<'a, T, F>
 where
     T: 'a,
@@ -74,30 +73,21 @@ where
                 // 如果是 root，就先对“Object”调用闭包
                 if self.is_root {
                     self.is_root = false;
-                    let root_item = IterItem2::Object;
-                    let _new_state = call_iter_fn(root_item, &state);
                 }
 
                 for (k, v) in obj.iter() {
-                    let (value, is_container) = match v {
-                        BorrowedValue::Object(_) => (ItemValue::Object, true),
-                        BorrowedValue::Array(_) => (ItemValue::Array, true),
-                        BorrowedValue::String(s) => (ItemValue::String(s), false),
-                        BorrowedValue::Static(s) => (ItemValue::Static(s), false),
+                    let value = match v {
+                        BorrowedValue::Object(_) => ItemValue::Object,
+                        BorrowedValue::Array(_) => ItemValue::Array,
+                        BorrowedValue::String(s) => ItemValue::String(s),
+                        BorrowedValue::Static(s) => ItemValue::Static(s),
                     };
 
                     let kv_item = IterItem2::KV(k, value);
                     // 为子节点生成新状态
                     let child_state = call_iter_fn(kv_item, &state);
 
-                    // 如果是容器，就推进栈；
-                    if is_container {
-                        self.stack.push((v, child_state));
-                    } else {
-                        // 如果不是容器，那就也 push 一次，这样下次 next()
-                        // 依然能把这个值 yield 给外部
-                        self.stack.push((v, child_state));
-                    }
+                    self.stack.push((v, child_state));
                 }
 
                 // 最后返回一条：这里我们就产出 `Object` + `state`
@@ -108,25 +98,19 @@ where
             BorrowedValue::Array(arr) => {
                 if self.is_root {
                     self.is_root = false;
-                    let root_item = IterItem2::Array;
-                    let _new_state = call_iter_fn(root_item, &state);
                 }
 
                 for (idx, v) in arr.iter().enumerate() {
-                    let (value, is_container) = match v {
-                        BorrowedValue::Object(_) => (ItemValue::Object, true),
-                        BorrowedValue::Array(_) => (ItemValue::Array, true),
-                        BorrowedValue::String(s) => (ItemValue::String(s), false),
-                        BorrowedValue::Static(s) => (ItemValue::Static(s), false),
+                    let value = match v {
+                        BorrowedValue::Object(_) => ItemValue::Object,
+                        BorrowedValue::Array(_) => ItemValue::Array,
+                        BorrowedValue::String(s) => ItemValue::String(s),
+                        BorrowedValue::Static(s) => ItemValue::Static(s),
                     };
                     let iv_item = IterItem2::IV(idx, value);
                     let child_state = call_iter_fn(iv_item, &state);
 
-                    if is_container {
-                        self.stack.push((v, child_state));
-                    } else {
-                        self.stack.push((v, child_state));
-                    }
+                    self.stack.push((v, child_state));
                 }
                 Some((IterItem2::Array, state))
             }
@@ -134,8 +118,6 @@ where
             BorrowedValue::String(s) => {
                 if self.is_root {
                     self.is_root = false;
-                    let root_item = IterItem2::String(s);
-                    let _new_state = call_iter_fn(root_item, &state);
                 }
                 Some((IterItem2::String(s), state))
             }
@@ -143,8 +125,6 @@ where
             BorrowedValue::Static(s) => {
                 if self.is_root {
                     self.is_root = false;
-                    let root_item = IterItem2::Static(&s);
-                    let _new_state = call_iter_fn(root_item, &state);
                 }
                 Some((IterItem2::Static(&s), state))
             }
