@@ -21,6 +21,10 @@ pub enum DBError {
     KVError(#[from] kv::EncodeError),
     #[error("Database init error: {0}")]
     DatabaseInitError(#[from] sled::Error),
+    #[error("Database transaction error {0}")]
+    DatabaseUnabortableTransaction(#[from] sled::transaction::UnabortableTransactionError),
+    #[error("Database trac")]
+    DatabaseTransationError(#[from] sled::transaction::TransactionError),
     #[error("Duplicate root key")]
     DuplicateRootKey,
     #[error("No super node")]
@@ -71,7 +75,7 @@ pub fn get_database() -> Result<&'static RwLock<Database>, DBError> {
     }
 }
 
-pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
+pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
     let k = kv::Key::decode(key)?;
     let db = get_database()?.write();
     let mut metadata = db.metadata.clone();
@@ -127,9 +131,57 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<()> {
         sub_key
     });
 
-    for (item, key) in json_iter {
-        // TODO: 插入数据
-    }
+    db.store.tree.transaction(|tree| {
+        for (item, key) in json_iter {
+            let key_raw = key.encode().as_slice();
+            let value = match item {
+                json::IterItem2::IV(_, v) | json::IterItem2::KV(_, v) => {
+                    v
+                }
+                json::IterItem2::Array => {
+                    json::ItemValue::Array
+                }
+                json::IterItem2::Object => {
+                    json::ItemValue::Object
+                }
+                json::IterItem2::Static(s) => {
+                    json::ItemValue::Static(s)
+                }
+                json::IterItem2::String(s) => {
+                    json::ItemValue::String(s)
+                }
+            };
+            let node_value = match value {
+                ItemValue::Array => {
+                    kv::NodeValue::Array
+                }
+                ItemValue::Object => {
+                    kv::NodeValue::Object
+                },
+                ItemValue::String(s) => {
+                    kv::NodeValue::String(Bytes::copy_from_slice(s.as_bytes()))
+                },
+                ItemValue::Static(StaticNode::Bool(b)) => {
+                    kv::NodeValue::Bool(*b)
+                },
+                ItemValue::Static(StaticNode::F64(f)) => {
+                    kv::NodeValue::Number(*f)
+                },
+                ItemValue::Static(StaticNode::I64(i)) => {
+                    kv::NodeValue::NumberI(*i)
+                },
+                ItemValue::Static(StaticNode::U64(u)) => {
+                    kv::NodeValue::NumberU(*u)
+                },
+                ItemValue::Static(StaticNode::Null) => {
+                    kv::NodeValue::Null
+                },
+            };
+            let node_value_raw: &[u8] = &node_value.encode();
+            tree.insert(key_raw, node_value_raw).map_err(|e| DBError::DatabaseUnabortableTransaction(e));
+        }
+        Ok(())
+    }).map_err(|e| DBError::DatabaseTransationError(e))?;
 
     // TODO: 插入 JSON 数据到kv数据库
     // json::parse_and_iter(value, k, |item, node_key| {

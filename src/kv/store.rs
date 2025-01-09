@@ -5,7 +5,7 @@ use std::path::Path;
 use super::{node::NodeValue, EncodeError, Key, StoreError};
 
 pub struct Store {
-    tree: sled::Db,
+    pub(crate) tree: sled::Db,
 }
 
 pub fn init_store<P: AsRef<Path>>(file: &P) -> Result<Store> {
