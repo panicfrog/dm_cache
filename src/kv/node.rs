@@ -113,7 +113,7 @@ impl VariableSizedId {
     }
 
     /// 与 `u64` 做加法，返回新的 `VariableSizedId`，若溢出则返回错误
-    pub fn checked_add(&self, rhs: u64) -> Result<Self, EncodeError> {
+    pub fn checked_plus(&self, rhs: u64) -> Result<Self, EncodeError> {
         let lhs_val = self.to_u64()?;
         // 检查加法是否溢出
         let (sum, overflow) = lhs_val.overflowing_add(rhs);
@@ -125,9 +125,15 @@ impl VariableSizedId {
     }
 
     /// 与 `u64` 做加法，返回新的 `VariableSizedId`
-    pub fn unchecked_add(&self, rhs: u64) -> Self {
+    pub fn unchecked_plus(&self, rhs: u64) -> Self {
         let lhs_val = self.to_u64().unwrap();
         let sum = lhs_val + rhs;
+        Self::new(sum)
+    }
+
+    pub fn unchecked_minus(&self, rhs: u64) -> Self {
+        let lhs_val = self.to_u64().unwrap();
+        let sum = lhs_val - rhs;
         Self::new(sum)
     }
 }
@@ -237,7 +243,7 @@ impl Key {
 
         // 写 n 个 self.ids
         for id in &self.ids {
-            buf.extend_from_slice(&id.value);
+            buf.extend_from_slice(&id.unchecked_plus(1).value);
         }
 
         // 写分隔符
@@ -265,7 +271,7 @@ impl Key {
             // 否则解析一个完整的 varint
             let (vid, consumed) = read_variable_sized_id(&bytes[offset..])?;
             offset += consumed;
-            ids.push(vid);
+            ids.push(vid.unchecked_minus(1));
         }
 
         // 现在 offset 指向 field_key 或超出边界
@@ -491,7 +497,7 @@ mod tests {
     #[test]
     fn test_checked_add_no_overflow() {
         let vid = VariableSizedId::new(100);
-        let vid_added = vid.checked_add(27).unwrap();
+        let vid_added = vid.checked_plus(27).unwrap();
         assert_eq!(vid_added.to_u64().unwrap(), 127);
     }
 
@@ -499,18 +505,18 @@ mod tests {
     fn test_checked_add_overflow() {
         let vid = VariableSizedId::new(u64::MAX);
         // 再加 1 肯定溢出
-        let result = vid.checked_add(1);
+        let result = vid.checked_plus(1);
         assert_eq!(result, Err(EncodeError::Overflow));
     }
 
     #[test]
     fn test_checked_add_large_values() {
         let vid = VariableSizedId::new(u64::MAX - 10);
-        let vid_added = vid.checked_add(10).unwrap();
+        let vid_added = vid.checked_plus(10).unwrap();
         assert_eq!(vid_added.to_u64().unwrap(), u64::MAX);
 
         // 再多加一点就溢出了
-        let result = vid_added.checked_add(1);
+        let result = vid_added.checked_plus(1);
         assert_eq!(result, Err(EncodeError::Overflow));
     }
 

@@ -5,10 +5,10 @@ mod kv;
 use anyhow::Result;
 use bytes::Bytes;
 use json::ItemValue;
-use kv::{NodeValue, VariableSizedId};
+use kv::{Key, NodeValue, VariableSizedId};
 use parking_lot::RwLock;
-use simd_json::{Node, StaticNode};
-use std::{ops::Deref, sync::OnceLock};
+use simd_json::StaticNode;
+use std::sync::OnceLock;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -21,6 +21,10 @@ pub enum DBError {
     KVError(#[from] kv::EncodeError),
     #[error("Database init error: {0}")]
     DatabaseInitError(#[from] sled::Error),
+    #[error("Store error {0}")]
+    DatabaseStoreError(#[from] kv::StoreError),
+    #[error("Database json error")]
+    DatabaseJsonError,
     #[error("Database transaction error {0}")]
     DatabaseUnabortableTransaction(#[from] sled::transaction::UnabortableTransactionError),
     #[error("Database trac")]
@@ -76,7 +80,7 @@ pub fn get_database() -> Result<&'static RwLock<Database>, DBError> {
 }
 
 pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
-    let k = kv::Key::decode(key)?;
+    let k = Key::decode(key)?;
     let db = get_database()?.write();
     let mut metadata = db.metadata.clone();
     if k.field_key.is_root() {
@@ -103,7 +107,7 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
             return Err(DBError::InvalidSuperNodeType)?;
         }
     }
-    let root_value = simd_json::to_borrowed_value(value)?;
+    let root_value = simd_json::to_borrowed_value(value).map_err(|_| DBError::DatabaseJsonError)?;
     let json_iter = json::JsonDfsIter::new(&root_value, k, |item, node_key| {
         let sub_key = match item {
             json::IterItem2::KV(k, _) => {
@@ -120,147 +124,76 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
                     VariableSizedId::new(metadata.last_id),
                     kv::KeyIndex::Id(VariableSizedId::new(idx.clone() as u64)),
                 );
-                println!("IV: {:?}", idx);
                 sub_key
             }
-            json::IterItem2::Array => node_key.clone(),
-            json::IterItem2::Object => node_key.clone(),
-            json::IterItem2::String(_) => node_key.clone(),
-            json::IterItem2::Static(_) => node_key.clone(),
+            json::IterItem2::Array
+            | json::IterItem2::Object
+            | json::IterItem2::String(_)
+            | json::IterItem2::Static(_) => {
+                if let Some(last_id) = node_key.ids.last() {
+                    if let Ok(last_id) = last_id.to_u64() {
+                        if metadata.last_id < last_id {
+                            metadata.last_id = last_id;
+                        }
+                    }
+                }
+                node_key.clone()
+            }
         };
         sub_key
     });
-
-    db.store.tree.transaction(|tree| {
-        for (item, key) in json_iter {
-            let key_raw = key.encode().as_slice();
-            let value = match item {
-                json::IterItem2::IV(_, v) | json::IterItem2::KV(_, v) => {
-                    v
-                }
-                json::IterItem2::Array => {
-                    json::ItemValue::Array
-                }
-                json::IterItem2::Object => {
-                    json::ItemValue::Object
-                }
-                json::IterItem2::Static(s) => {
-                    json::ItemValue::Static(s)
-                }
-                json::IterItem2::String(s) => {
-                    json::ItemValue::String(s)
-                }
-            };
-            let node_value = match value {
-                ItemValue::Array => {
-                    kv::NodeValue::Array
-                }
-                ItemValue::Object => {
-                    kv::NodeValue::Object
-                },
-                ItemValue::String(s) => {
-                    kv::NodeValue::String(Bytes::copy_from_slice(s.as_bytes()))
-                },
-                ItemValue::Static(StaticNode::Bool(b)) => {
-                    kv::NodeValue::Bool(*b)
-                },
-                ItemValue::Static(StaticNode::F64(f)) => {
-                    kv::NodeValue::Number(*f)
-                },
-                ItemValue::Static(StaticNode::I64(i)) => {
-                    kv::NodeValue::NumberI(*i)
-                },
-                ItemValue::Static(StaticNode::U64(u)) => {
-                    kv::NodeValue::NumberU(*u)
-                },
-                ItemValue::Static(StaticNode::Null) => {
-                    kv::NodeValue::Null
-                },
-            };
-            let node_value_raw: &[u8] = &node_value.encode();
-            tree.insert(key_raw, node_value_raw).map_err(|e| DBError::DatabaseUnabortableTransaction(e));
-        }
-        Ok(())
-    }).map_err(|e| DBError::DatabaseTransationError(e))?;
-
-    // TODO: 插入 JSON 数据到kv数据库
-    // json::parse_and_iter(value, k, |item, node_key| {
-    //     let raw_node_key = node_key.encode();
-    //     let (sub_key, raw_node_value) = match item {
-    //         json::IterItem::KV(k, item_value) => {
-    //             metadata.last_id += 1;
-    //             let sub_key = node_key.sub_key(
-    //                 VariableSizedId::new(metadata.last_id),
-    //                 kv::KeyIndex::Field(Bytes::copy_from_slice(k.as_bytes())),
-    //             );
-    //             // TODO: store item_value
-    //             println!("KV: {:?}", k);
-    //             let node_value = match item_value {
-    //                 ItemValue::Array => NodeValue::Array,
-    //                 ItemValue::Object => NodeValue::Array,
-    //                 ItemValue::String(s) => NodeValue::String(Bytes::copy_from_slice(s.as_bytes())),
-    //                 ItemValue::Static(StaticNode::Bool(b)) => NodeValue::Bool(*b),
-    //                 ItemValue::Static(StaticNode::F64(f)) => NodeValue::Number(*f),
-    //                 ItemValue::Static(StaticNode::I64(i)) => NodeValue::NumberI(*i),
-    //                 ItemValue::Static(StaticNode::U64(u)) => NodeValue::NumberU(*u),
-    //                 ItemValue::Static(StaticNode::Null) => NodeValue::Null,
-    //             };
-    //             let raw_node_value = node_value.encode();
-    //             (sub_key, raw_node_value)
-    //         }
-    //         json::IterItem::IV(idx, item_value) => {
-    //             metadata.last_id += 1;
-    //             let sub_key = node_key.sub_key(
-    //                 VariableSizedId::new(metadata.last_id),
-    //                 kv::KeyIndex::Id(VariableSizedId::new(idx.clone() as u64)),
-    //             );
-    //             // TODO: store item_value
-    //             let node_value = match item_value {
-    //                 ItemValue::Array => NodeValue::Array,
-    //                 ItemValue::Object => NodeValue::Array,
-    //                 ItemValue::String(s) => NodeValue::String(Bytes::copy_from_slice(s.as_bytes())),
-    //                 ItemValue::Static(StaticNode::Bool(b)) => NodeValue::Bool(*b),
-    //                 ItemValue::Static(StaticNode::F64(f)) => NodeValue::Number(*f),
-    //                 ItemValue::Static(StaticNode::I64(i)) => NodeValue::NumberI(*i),
-    //                 ItemValue::Static(StaticNode::U64(u)) => NodeValue::NumberU(*u),
-    //                 ItemValue::Static(StaticNode::Null) => NodeValue::Null,
-    //             };
-    //             let raw_node_value = node_value.encode();
-    //             println!("IV: {:?}", idx);
-    //             (sub_key, raw_node_value)
-    //         }
-    //         json::IterItem::Array(arr_key) => {
-    //             // TODO: store Array as value
-    //             let node_value = NodeValue::Array;
-    //             let raw_node_value = node_value.encode();
-    //             ((*arr_key).clone(), raw_node_value)
-    //         }
-    //         json::IterItem::Object(obj) => {
-    //             // TODO: store Object as value
-    //             let node_value = NodeValue::Object;
-    //             let raw_node_value = node_value.encode();
-    //             ((*obj).clone(), raw_node_value)
-    //         }
-    //         json::IterItem::String(s) => {
-    //             // TODO: store String as value
-    //             let node_value = NodeValue::String(Bytes::copy_from_slice(s.as_bytes()));
-    //             let raw_node_value = node_value.encode();
-    //             (node_key.clone(), raw_node_value)
-    //         }
-    //         json::IterItem::Static(s) => {
-    //             // TODO: store Static as value
-    //             let node_value = match s {
-    //                 StaticNode::Bool(b) => NodeValue::Bool(*b),
-    //                 StaticNode::F64(f) => NodeValue::Number(*f),
-    //                 StaticNode::I64(i) => NodeValue::NumberI(*i),
-    //                 StaticNode::U64(u) => NodeValue::NumberU(*u),
-    //                 StaticNode::Null => NodeValue::Null,
-    //             };
-    //             let raw_node_value = node_value.encode();
-    //             (node_key.clone(), raw_node_value)
-    //         }
-    //     };
-    //     sub_key
-    // })?;
+    let mut betch = sled::Batch::default();
+    for (item, key) in json_iter {
+        let encoded_key = key.encode();
+        let key_raw = encoded_key.as_slice();
+        let value = match item {
+            json::IterItem2::IV(_, v) | json::IterItem2::KV(_, v) => v,
+            json::IterItem2::Array => json::ItemValue::Array,
+            json::IterItem2::Object => json::ItemValue::Object,
+            json::IterItem2::Static(s) => json::ItemValue::Static(s),
+            json::IterItem2::String(s) => json::ItemValue::String(s),
+        };
+        let node_value = match value {
+            ItemValue::Array => NodeValue::Array,
+            ItemValue::Object => NodeValue::Object,
+            ItemValue::String(s) => NodeValue::String(Bytes::copy_from_slice(s.as_bytes())),
+            ItemValue::Static(StaticNode::Bool(b)) => NodeValue::Bool(*b),
+            ItemValue::Static(StaticNode::F64(f)) => NodeValue::Number(*f),
+            ItemValue::Static(StaticNode::I64(i)) => NodeValue::NumberI(*i),
+            ItemValue::Static(StaticNode::U64(u)) => NodeValue::NumberU(*u),
+            ItemValue::Static(StaticNode::Null) => NodeValue::Null,
+        };
+        let node_value_raw: &[u8] = &node_value.encode();
+        betch.insert(key_raw, node_value_raw);
+    }
+    // insert metadata
+    let metadata_raw = metadata.encode();
+    betch.insert(METADAT_KEY, metadata_raw);
+    db.store.tree.apply_batch(betch)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insert_json() {
+        let path = "test_db";
+        set_database_path(path).unwrap();
+        let mut value = r#"{"a": 1, "b": 2, "c": [1, 2, 3], "d": {"e": 1, "f": 2}}"#
+            .as_bytes()
+            .to_vec();
+        let root_key = Key {
+            ids: vec![VariableSizedId::new(0)],
+            field_key: kv::KeyIndex::Root,
+        };
+        let root_key_raw = root_key.encode();
+        insert_json(&root_key_raw, &mut value).unwrap();
+        let db = get_database().unwrap().read();
+        db.store.tree.iter().for_each(|r| {
+            let (k, v) = r.unwrap();
+            println!("{:?} {:?}", k, v);
+        });
+    }
 }
