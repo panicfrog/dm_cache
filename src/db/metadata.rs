@@ -44,7 +44,7 @@ impl Metadata {
     }
 
     pub fn decode(buf: &[u8]) -> Result<Self, EncodeError> {
-        if (buf.len() < 24) || (buf.len() % 8 != 0) {
+        if buf.len() < 24 {
             return Err(EncodeError::InvalidLength);
         }
         // 1. 读取version

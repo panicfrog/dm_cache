@@ -190,7 +190,21 @@ mod tests {
         };
         let root_key_raw = root_key.encode();
         insert_json(&root_key_raw, &mut value).unwrap();
+
         let db = get_database().unwrap().read();
+        db.store.tree.flush().unwrap();
+        db.store.tree.iter().for_each(|r| {
+            let (k, v) = r.unwrap();
+            println!("{:?} {:?}", k, v);
+        });
+    }
+
+    #[test]
+    fn test_get_database_metadata() {
+        let path = "test_db";
+        set_database_path(path).unwrap();
+        let db = get_database().unwrap();
+        let db = db.read();
         db.store.tree.iter().for_each(|r| {
             let (k, v) = r.unwrap();
             println!("{:?} {:?}", k, v);

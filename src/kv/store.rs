@@ -2,7 +2,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use std::path::Path;
 
-use super::{node::NodeValue, EncodeError, Key, StoreError};
+use super::{node::NodeValue, Key, StoreError};
 
 pub struct Store {
     pub(crate) tree: sled::Db,
