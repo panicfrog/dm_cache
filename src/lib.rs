@@ -4,8 +4,9 @@ mod kv;
 
 use anyhow::Result;
 use bytes::Bytes;
+use db::Metadata;
 use json::ItemValue;
-use kv::{Key, NodeValue, VariableSizedId};
+use kv::{Key, KeyIndex, NodeValue, VariableSizedId};
 use parking_lot::RwLock;
 use simd_json::StaticNode;
 use std::sync::OnceLock;
@@ -79,6 +80,11 @@ pub fn get_database() -> Result<&'static RwLock<Database>, DBError> {
     }
 }
 
+fn make_sub_key(node_key: &Key, metadata: &mut Metadata, kind: KeyIndex) -> Key {
+    metadata.last_id += 1;
+    node_key.sub_key(VariableSizedId::new(metadata.last_id), kind)
+}
+
 pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
     let k = Key::decode(key)?;
     let db = get_database()?.write();
@@ -110,26 +116,20 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
     let root_value = simd_json::to_borrowed_value(value).map_err(|_| DBError::DatabaseJsonError)?;
     let json_iter = json::JsonDfsIter::new(&root_value, k, |item, node_key| {
         let sub_key = match item {
-            json::IterItem2::KV(k, _) => {
-                metadata.last_id += 1;
-                let sub_key = node_key.sub_key(
-                    VariableSizedId::new(metadata.last_id),
-                    kv::KeyIndex::Field(Bytes::copy_from_slice(k.as_bytes())),
-                );
-                sub_key
-            }
-            json::IterItem2::IV(idx, _) => {
-                metadata.last_id += 1;
-                let sub_key = node_key.sub_key(
-                    VariableSizedId::new(metadata.last_id),
-                    kv::KeyIndex::Id(VariableSizedId::new(idx.clone() as u64)),
-                );
-                sub_key
-            }
-            json::IterItem2::Array
-            | json::IterItem2::Object
-            | json::IterItem2::String(_)
-            | json::IterItem2::Static(_) => {
+            json::IterItem::KV(k, _) => make_sub_key(
+                node_key,
+                &mut metadata,
+                kv::KeyIndex::Field(Bytes::copy_from_slice(k.as_bytes())),
+            ),
+            json::IterItem::IV(idx, _) => make_sub_key(
+                node_key,
+                &mut metadata,
+                kv::KeyIndex::Id(VariableSizedId::new(*idx as u64)),
+            ),
+            json::IterItem::Array
+            | json::IterItem::Object
+            | json::IterItem::String(_)
+            | json::IterItem::Static(_) => {
                 if let Some(last_id) = node_key.ids.last() {
                     if let Ok(last_id) = last_id.to_u64() {
                         if metadata.last_id < last_id {
@@ -147,11 +147,11 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
         let encoded_key = key.encode();
         let key_raw = encoded_key.as_slice();
         let value = match item {
-            json::IterItem2::IV(_, v) | json::IterItem2::KV(_, v) => v,
-            json::IterItem2::Array => json::ItemValue::Array,
-            json::IterItem2::Object => json::ItemValue::Object,
-            json::IterItem2::Static(s) => json::ItemValue::Static(s),
-            json::IterItem2::String(s) => json::ItemValue::String(s),
+            json::IterItem::IV(_, v) | json::IterItem::KV(_, v) => v,
+            json::IterItem::Array => json::ItemValue::Array,
+            json::IterItem::Object => json::ItemValue::Object,
+            json::IterItem::Static(s) => json::ItemValue::Static(s),
+            json::IterItem::String(s) => json::ItemValue::String(s),
         };
         let node_value = match value {
             ItemValue::Array => NodeValue::Array,
