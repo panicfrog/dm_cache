@@ -46,7 +46,7 @@ pub struct Database {
 // 全局变量
 static INIT_PATH: OnceLock<String> = OnceLock::new();
 static DATABASE: OnceLock<Result<RwLock<Database>, DBError>> = OnceLock::new();
-const METADAT_KEY: &'static [u8] = b"__METADATA__";
+const METADAT_KEY: &'static [u8] = b"~~METADATA~~";
 
 // 设置数据库路径
 pub fn set_database_path(path: &str) -> Result<(), DBError> {
