@@ -21,8 +21,7 @@ pub enum IterItem<'a> {
 /// 带状态的 DFS 迭代器，不再返回错误。
 pub struct JsonDfsIter<'a, T, F>
 where
-    T: 'a,
-    F: FnMut(&'a IterItem<'a>, &T) -> T,
+    F: for<'b> FnMut(&'b IterItem<'b>, &T) -> T,
 {
     stack: Vec<(&'a BorrowedValue<'a>, T)>,
     iter_fn: F,
@@ -30,8 +29,7 @@ where
 
 impl<'a, T, F> JsonDfsIter<'a, T, F>
 where
-    T: 'a,
-    F: FnMut(&IterItem<'a>, &T) -> T,
+    F: for<'b> FnMut(&'b IterItem<'b>, &T) -> T,
 {
     pub fn new(root_value: &'a BorrowedValue<'a>, root_state: T, iter_fn: F) -> Self {
         Self {
@@ -42,8 +40,7 @@ where
 }
 impl<'a, T, F> Iterator for JsonDfsIter<'a, T, F>
 where
-    T: 'a,
-    F: FnMut(&IterItem<'a>, &T) -> T,
+    F: for<'b> FnMut(&'b IterItem<'b>, &T) -> T,
 {
     // 不返回错误，直接产出一个 (IterItem2, T)
     type Item = (IterItem<'a>, T);

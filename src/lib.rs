@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn test_insert_json() {
         let path = "test_db";
-        set_database_path(path).unwrap();
+        let _ = set_database_path(path); // 忽略可能的错误，因为可能已经设置过
         let mut value = r#"{"a": 1, "b": 2, "c": [1, 2, 3], "d": {"e": 1, "f": 2}}"#
             .as_bytes()
             .to_vec();
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_get_database_metadata() {
         let path = "test_db";
-        set_database_path(path).unwrap();
+        let _ = set_database_path(path); // 忽略可能的错误，因为可能已经设置过
         let db = get_database().unwrap();
         let db = db.read();
         db.store.tree.iter().for_each(|r| {
