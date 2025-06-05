@@ -12,6 +12,9 @@ use simd_json::StaticNode;
 use std::sync::OnceLock;
 use thiserror::Error;
 
+// 重新导出 JSONPath 解析相关的类型和函数
+pub use db::{parse, JsonPathSegment, JsonPathParseError};
+
 #[derive(Error, Debug, Clone)]
 pub enum DBError {
     #[error("Database path not set")]
