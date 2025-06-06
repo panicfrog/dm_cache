@@ -187,7 +187,7 @@ mod tests {
         let mut value = r#"{"a": 1, "b": 2, "c": [1, 2, 3], "d": {"e": 1, "f": 2}}"#
             .as_bytes()
             .to_vec();
-        let root_key = Key {
+        let root_key: Key = Key {
             ids: vec![VariableSizedId::new(0)],
             field_key: kv::KeyIndex::Root,
         };

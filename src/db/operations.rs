@@ -3,6 +3,8 @@
 use jsonpath_rust::parser::parse_json_path;
 use thiserror::Error;
 
+use crate::{kv::Key, DBError, Database};
+
 /// JSONPath 路径段，表示路径中的一个访问操作
 /// 
 /// 目前只支持两种基本的访问模式：
@@ -104,6 +106,13 @@ pub fn parse(path: &str) -> Result<Vec<JsonPathSegment>, JsonPathParseError> {
     
     Ok(segments)
 }
+
+/*
+TODO: 1. 创建根据db + root_key + Vec<JsonPathSegment> 创建 kv::node::Key 的方法 
+ */
+ pub fn json_path_key(db: &Database, root_key: &str, segments: &Vec<JsonPathSegment>) -> Result<Key, DBError> {
+    unimplemented!()
+ }
 
 #[cfg(test)]
 mod tests {

@@ -123,7 +123,7 @@ mod tests {
         let value = simd_json::to_borrowed_value(d.as_mut_slice()).unwrap();
         let json_iter = JsonDfsIter::new(&value, vec![index.get()], |iter_item, key| {
             let result = match iter_item {
-                IterItem::KV(k, value) => {
+                IterItem::KV(_, _) => {
                     index.set(index.get() + 1);
                     let current_idx = index.get();
                     let mut idxes = Vec::with_capacity(key.len() + 1);
@@ -131,7 +131,7 @@ mod tests {
                     idxes.push(current_idx);
                     idxes
                 }
-                IterItem::IV(i, value) => {
+                IterItem::IV(_, _) => {
                     index.set(index.get() + 1);
                     let current_idx = index.get();
                     let mut idxes = Vec::with_capacity(key.len() + 1);
@@ -149,12 +149,12 @@ mod tests {
                     ids.extend_from_slice(key);
                     ids
                 }
-                IterItem::String(s) => {
+                IterItem::String(_) => {
                     let mut ids = Vec::with_capacity(key.len());
                     ids.extend_from_slice(key);
                     ids
                 }
-                IterItem::Static(s) => {
+                IterItem::Static(_) => {
                     let mut ids = Vec::with_capacity(key.len());
                     ids.extend_from_slice(key);
                     ids
