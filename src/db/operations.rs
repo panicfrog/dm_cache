@@ -3,7 +3,7 @@
 use jsonpath_rust::parser::parse_json_path;
 use thiserror::Error;
 
-use crate::{kv::Key, DBError, Database};
+use crate::{kv::{Key, VariableSizedId}, DBError, Database};
 
 /// JSONPath 路径段，表示路径中的一个访问操作
 /// 

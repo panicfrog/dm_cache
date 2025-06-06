@@ -90,10 +90,10 @@ fn make_sub_key(node_key: &Key, metadata: &mut Metadata, kind: KeyIndex) -> Key 
 
 pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
     let k = Key::decode(key)?;
-    let db = get_database()?.write();
+    let mut db = get_database()?.write();
     let mut metadata = db.metadata.clone();
     if k.field_key.is_root() {
-        if metadata.roots.contains(value) {
+        if metadata.roots.contains(key) {
             return Err(DBError::DuplicateRootKey)?;
         }
         metadata.roots.insert(key.to_vec());
@@ -173,6 +173,7 @@ pub fn insert_json(key: &[u8], value: &mut [u8]) -> Result<(), DBError> {
     let metadata_raw = metadata.encode();
     betch.insert(METADAT_KEY, metadata_raw);
     db.store.tree.apply_batch(betch)?;
+    db.metadata = metadata;
     Ok(())
 }
 
@@ -183,6 +184,12 @@ mod tests {
     #[test]
     fn test_insert_json() {
         let path = "test_db";
+        
+        // 清理之前的测试数据库
+        if std::path::Path::new(path).exists() {
+            std::fs::remove_dir_all(path).expect("Failed to remove test database");
+        }
+        
         let _ = set_database_path(path); // 忽略可能的错误，因为可能已经设置过
         let mut value = r#"{"a": 1, "b": 2, "c": [1, 2, 3], "d": {"e": 1, "f": 2}}"#
             .as_bytes()
@@ -204,7 +211,13 @@ mod tests {
 
     #[test]
     fn test_get_database_metadata() {
-        let path = "test_db";
+        let path = "test_db_metadata";
+        
+        // 清理之前的测试数据库
+        if std::path::Path::new(path).exists() {
+            std::fs::remove_dir_all(path).expect("Failed to remove test database");
+        }
+        
         let _ = set_database_path(path); // 忽略可能的错误，因为可能已经设置过
         let db = get_database().unwrap();
         let db = db.read();
@@ -212,5 +225,51 @@ mod tests {
             let (k, v) = r.unwrap();
             println!("{:?} {:?}", k, v);
         });
+    }
+
+    #[test]
+    fn test_duplicate_root_key() {
+        let path = "test_duplicate_db";
+        
+        // 清理之前的测试数据库
+        if std::path::Path::new(path).exists() {
+            std::fs::remove_dir_all(path).expect("Failed to remove test database");
+        }
+        
+        let _ = set_database_path(path); // 忽略可能的错误，因为可能已经设置过
+        
+        let mut value1 = r#"{"x": 1, "y": 2}"#.as_bytes().to_vec();
+        let mut value2 = r#"{"z": 3, "w": 4}"#.as_bytes().to_vec();
+        
+        // 使用相同的root key来测试重复插入
+        let root_key: Key = Key {
+            ids: vec![VariableSizedId::new(100)],
+            field_key: kv::KeyIndex::Root,
+        };
+        let root_key_raw = root_key.encode();
+        
+        // 第一次插入应该成功
+        let result1 = insert_json(&root_key_raw, &mut value1);
+        assert!(result1.is_ok(), "First insertion should succeed");
+        
+        // 检查插入后metadata.roots长度应该是1
+        {
+            let db = get_database().unwrap().read();
+            assert_eq!(db.metadata.roots.len(), 1, "After first insertion, metadata.roots should contain exactly 1 root key");
+            assert!(db.metadata.roots.contains(&root_key_raw), "metadata.roots should contain the inserted root key");
+        }
+        
+        // 第二次插入相同的root key应该失败
+        let result2 = insert_json(&root_key_raw, &mut value2);
+        assert!(result2.is_err(), "Second insertion should fail");
+        
+        if let Err(err) = result2 {
+            match err {
+                DBError::DuplicateRootKey => {
+                    println!("Correctly detected duplicate root key");
+                }
+                _ => panic!("Expected DuplicateRootKey error, but got: {:?}", err),
+            }
+        }
     }
 }
